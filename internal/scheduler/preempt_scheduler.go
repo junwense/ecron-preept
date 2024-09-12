@@ -79,22 +79,33 @@ func (p *PreemptScheduler) Schedule(ctx context.Context) error {
 }
 
 func (p *PreemptScheduler) doTaskWithAutoRefresh(ctx context.Context, t task.Task, exec executor.Executor) {
-	// 这里可以从task里面取出任务的超时时间设置到ctx里面
+
 	cancelCtx, cancelCause := context.WithCancelCause(ctx)
-	defer cancelCause(errors.New("正常结束任务"))
+	//defer cancelCause(errors.New("正常结束任务"))
+	defer func() {
+		ctx1, cancel := context.WithTimeout(ctx, time.Second*3)
+		defer cancel()
+		err := p.pe.Release(ctx1, t)
+		if err != nil {
+			p.logger.Error("停止任务异常", slog.Int64("task_id", t.ID), slog.Any("error", err))
+		}
+	}()
 	go func() {
 		ch := p.pe.AutoRefresh(cancelCtx, t)
-		select {
-		case s := <-ch:
-			if s.Err() != nil {
-				p.logger.Error(s.Err().Error(), slog.Int64("TaskID", t.ID))
+		for {
+			select {
+			case s, ok := <-ch:
+				if ok && s.Err() != nil {
+					p.logger.Error(s.Err().Error(), slog.Int64("TaskID", t.ID))
+					if t.NeedInterrupt {
+						// 如果不中断就不管.
+						cancelCause(s.Err())
+						return
+					}
+				}
+			case <-cancelCtx.Done():
+				return
 			}
-			if t.NeedInterrupt {
-				// 如果不中断就不管.
-				cancelCause(s.Err())
-			}
-			// 正常退出
-		case <-cancelCtx.Done():
 		}
 	}()
 

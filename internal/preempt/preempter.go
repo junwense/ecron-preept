@@ -6,14 +6,13 @@ import (
 	"github.com/ecodeclub/ecron/internal/storage"
 	"github.com/ecodeclub/ecron/internal/task"
 	"github.com/google/uuid"
-	"log/slog"
 	"math/rand"
+	"sync"
 	"time"
 )
 
 type DefaultPreempter struct {
 	taskRepository storage.TaskRepository
-	logger         *slog.Logger
 	// with options
 	refreshTimeout  time.Duration
 	refreshInterval time.Duration
@@ -21,6 +20,8 @@ type DefaultPreempter struct {
 	maxRetryTimes   uint8
 	retrySleepTime  time.Duration
 	randIndex       func(num int) int
+	ones            sync.Once
+	done            chan struct{}
 }
 
 func NewDefaultPreempter(dao storage.TaskRepository) *DefaultPreempter {
@@ -29,12 +30,14 @@ func NewDefaultPreempter(dao storage.TaskRepository) *DefaultPreempter {
 
 		refreshTimeout:  2 * time.Second,
 		refreshInterval: time.Second * 5,
-		buffSize:        3,
+		buffSize:        10,
 		maxRetryTimes:   3,
 		retrySleepTime:  time.Second,
 		randIndex: func(num int) int {
 			return rand.Intn(num)
 		},
+		done: make(chan struct{}),
+		ones: sync.Once{},
 	}
 }
 
@@ -59,52 +62,52 @@ func (d *DefaultPreempter) Preempt(ctx context.Context) (task.Task, error) {
 func (d *DefaultPreempter) AutoRefresh(ctx context.Context, t task.Task) (s <-chan Status) {
 	sch := make(chan Status, d.buffSize)
 	go func() {
-		defer func() {
-			err := d.Release(ctx, t)
-			if err != nil {
-				d.logger.Error("停止任务失败", slog.Int64("task_id", t.ID), slog.Any("error", err))
+		defer close(sch)
+		ticker := time.NewTicker(d.refreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				send2Ch(sch, NewDefaultStatus(d.refreshTask(ctx, t)))
+			case <-d.done:
+				send2Ch(sch, NewDefaultStatus(ErrPreemptHasRelease))
+				return
+			case <-ctx.Done():
+				send2Ch(sch, NewDefaultStatus(ctx.Err()))
+				return
 			}
-		}()
-		err := d.autoRefresh(ctx, t)
-		select {
-		case sch <- NewDefaultLeaseStatus(err):
-		default:
-
 		}
 	}()
 
 	return sch
 }
 
-// autoRefresh 控制 ctx.Done 和 ticker
-func (d *DefaultPreempter) autoRefresh(ctx context.Context, t task.Task) error {
-	ticker := time.NewTicker(d.refreshInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			err := d.refreshTask(ctx, ticker, t)
-			if err != nil {
-				return err
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+func send2Ch(ch chan<- Status, st Status) {
+	select {
+	case ch <- st:
+	default:
+
 	}
 }
 
-// refreshTask 控制重试和真的执行刷新
-func (d *DefaultPreempter) refreshTask(ctx context.Context, ticker *time.Ticker, t task.Task) error {
+// refreshTask 控制重试和真的执行刷新,续约间隔 > 当次续约（含重试）的所有时间
+func (d *DefaultPreempter) refreshTask(ctx context.Context, t task.Task) error {
 	var i = 0
 	var err error
 	for {
-		if i >= int(d.maxRetryTimes) {
+		if ctx.Err() != nil {
 			return err
 		}
-		err = d.Refresh(ctx, t)
+
+		if i >= int(d.maxRetryTimes) {
+			// 这个分支是超时一定次数失败了
+			return err
+		}
+		ctx1, cancel := context.WithTimeout(ctx, d.refreshTimeout)
+		err = d.Refresh(ctx1, t)
+		cancel()
 		switch {
 		case err == nil:
-			ticker.Reset(d.refreshInterval)
 			return nil
 		case errors.Is(err, context.DeadlineExceeded):
 			i++
@@ -116,15 +119,12 @@ func (d *DefaultPreempter) refreshTask(ctx context.Context, ticker *time.Ticker,
 }
 
 func (d *DefaultPreempter) Refresh(ctx context.Context, t task.Task) error {
-	ctx, cancel := context.WithTimeout(ctx, d.refreshTimeout)
-	defer cancel()
-	err := d.taskRepository.RefreshTask(ctx, t.ID, t.Owner)
-	return err
+	return d.taskRepository.RefreshTask(ctx, t.ID, t.Owner)
 }
 
 func (d *DefaultPreempter) Release(ctx context.Context, t task.Task) error {
-	// 解除续约的时候可以不用原始上下文,因为超时了也需要解除,这里保持幂等就可以
-	ctx, cancel := context.WithTimeout(context.Background(), d.refreshTimeout)
-	defer cancel()
+	d.ones.Do(func() {
+		close(d.done)
+	})
 	return d.taskRepository.ReleaseTask(ctx, t.ID, t.Owner)
 }

@@ -1,15 +1,15 @@
 package preempt
 
-type DefaultLeaseStatus struct {
+type DefaultStatus struct {
 	err error
 }
 
-func (d DefaultLeaseStatus) Err() error {
+func (d DefaultStatus) Err() error {
 	return d.err
 }
 
-func NewDefaultLeaseStatus(err error) DefaultLeaseStatus {
-	return DefaultLeaseStatus{
+func NewDefaultStatus(err error) DefaultStatus {
+	return DefaultStatus{
 		err: err,
 	}
 }

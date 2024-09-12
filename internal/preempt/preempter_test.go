@@ -157,7 +157,7 @@ func TestPreemptScheduler_RPreempt_AutoRefresh(t *testing.T) {
 			ctxFn: func() context.Context {
 				ctx, cancel := context.WithCancel(context.Background())
 				go func() {
-					time.Sleep(time.Second * 10)
+					time.Sleep(time.Second * 11)
 					cancel()
 				}()
 				return ctx
@@ -175,12 +175,95 @@ func TestPreemptScheduler_RPreempt_AutoRefresh(t *testing.T) {
 			t1, err := preempter.Preempt(context.Background())
 			assert.NoError(t, err)
 
-			fn := tc.ctxFn()
-			sch := preempter.AutoRefresh(fn, t1)
-			select {
-			case s := <-sch:
-				assert.Equal(t, tc.wantErr, s.Err())
+			ctxFn := tc.ctxFn()
+			sch := preempter.AutoRefresh(ctxFn, t1)
+			var shouldContinue = true
+			for shouldContinue {
+				select {
+				case s, ok := <-sch:
+					if ok && s.Err() != nil {
+						assert.Equal(t, tc.wantErr, s.Err())
+						err1 := preempter.Release(ctxFn, t1)
+						assert.NoError(t, err1)
+						shouldContinue = false
+					}
+				}
 			}
+		})
+	}
+}
+
+func TestPreemptScheduler_RPreempt_Release(t *testing.T) {
+	testCases := []struct {
+		name    string
+		mock    func(ctrl *gomock.Controller) storage.TaskRepository
+		wantErr error
+		ctxFn   func() context.Context
+	}{
+		{
+			name: "正常结束（release）",
+			mock: func(ctrl *gomock.Controller) storage.TaskRepository {
+				td := daomocks.NewMockTaskRepository(ctrl)
+
+				t := task.Task{
+					ID:    1,
+					Owner: "tom",
+				}
+				td.EXPECT().TryPreempt(gomock.Any(), gomock.Any()).Return(t, nil)
+
+				td.EXPECT().RefreshTask(gomock.Any(), t.ID, t.Owner).AnyTimes().Return(nil)
+				td.EXPECT().ReleaseTask(gomock.Any(), t.ID, t.Owner).AnyTimes().Return(nil)
+
+				return td
+			},
+			wantErr: ErrPreemptHasRelease,
+			ctxFn: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				go func() {
+					time.Sleep(time.Second * 60)
+					cancel()
+				}()
+				return ctx
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			td := tc.mock(ctrl)
+
+			preempter := NewDefaultPreempter(td)
+			t1, err := preempter.Preempt(context.Background())
+			assert.NoError(t, err)
+
+			ctxFn := tc.ctxFn()
+			sch := preempter.AutoRefresh(ctxFn, t1)
+			go func() {
+				var shouldContinue = true
+				for shouldContinue {
+					select {
+					case s, ok := <-sch:
+						if ok && s.Err() != nil {
+							assert.Equal(t, tc.wantErr, s.Err())
+							err1 := preempter.Release(ctxFn, t1)
+							assert.NoError(t, err1)
+							shouldContinue = false
+						}
+					}
+				}
+			}()
+			time.Sleep(time.Second * 6)
+			err1 := preempter.Release(ctxFn, t1)
+			assert.NoError(t, err1)
+
+			time.Sleep(time.Second * 12)
+			select {
+			case _, ok := <-sch:
+				assert.Equal(t, ok, false)
+			}
+
 		})
 	}
 }
