@@ -92,7 +92,7 @@ type DefaultTaskLeaser struct {
 
 func (d *DefaultTaskLeaser) Refresh(ctx context.Context) error {
 	if d.hasDone.Load() {
-		return ErrPreemptHasRelease
+		return ErrLeaserHasRelease
 	}
 	return d.taskRepository.RefreshTask(ctx, d.t.ID, d.t.Owner)
 }
@@ -103,7 +103,7 @@ func (d *DefaultTaskLeaser) Release(ctx context.Context) error {
 		close(d.done)
 	})
 	if d.hasDone.Load() {
-		return ErrPreemptHasRelease
+		return ErrLeaserHasRelease
 	}
 	return d.taskRepository.ReleaseTask(ctx, d.t.ID, d.t.Owner)
 }
@@ -114,7 +114,7 @@ func (d *DefaultTaskLeaser) GetTask() task.Task {
 
 func (d *DefaultTaskLeaser) AutoRefresh(ctx context.Context) (s <-chan Status, err error) {
 	if d.hasDone.Load() {
-		return nil, ErrPreemptHasRelease
+		return nil, ErrLeaserHasRelease
 	}
 	sch := make(chan Status, d.buffSize)
 	go func() {
@@ -126,7 +126,7 @@ func (d *DefaultTaskLeaser) AutoRefresh(ctx context.Context) (s <-chan Status, e
 			case <-ticker.C:
 				send2Ch(sch, NewDefaultStatus(d.refreshTask(ctx)))
 			case <-d.done:
-				send2Ch(sch, NewDefaultStatus(ErrPreemptHasRelease))
+				send2Ch(sch, NewDefaultStatus(ErrLeaserHasRelease))
 				return
 			case <-ctx.Done():
 				send2Ch(sch, NewDefaultStatus(ctx.Err()))

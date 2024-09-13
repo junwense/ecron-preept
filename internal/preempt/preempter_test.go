@@ -219,7 +219,7 @@ func TestPreemptScheduler_TaskLeaser_Release(t *testing.T) {
 
 				return td
 			},
-			wantErr: ErrPreemptHasRelease,
+			wantErr: ErrLeaserHasRelease,
 			ctxFn: func() context.Context {
 				ctx, cancel := context.WithCancel(context.Background())
 				go func() {

@@ -8,8 +8,8 @@ import (
 
 //go:generate mockgen -source=./types.go -package=preemptmocks -destination=./mocks/preempt.mock.go
 var (
-	ErrNoTaskToPreempt   = errors.New("没有任务可以抢占")
-	ErrPreemptHasRelease = errors.New("抢占任务已经被释放，退出自动续约")
+	ErrNoTaskToPreempt  = errors.New("没有任务可以抢占")
+	ErrLeaserHasRelease = errors.New("抢占任务已经被释放,不能在进行操作")
 )
 
 // Preempter 成功会返回TaskLeaser
