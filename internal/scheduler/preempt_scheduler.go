@@ -101,10 +101,13 @@ func (p *PreemptScheduler) doTaskWithAutoRefresh(ctx context.Context, l preempt.
 	}()
 	go func() {
 		ch, err := l.AutoRefresh(cancelCtx)
-		if t.NeedInterrupt {
-			cancelCause(err)
+		if err != nil {
+			if t.NeedInterrupt {
+				cancelCause(err)
+			}
 			return
 		}
+
 		for {
 			select {
 			case s, ok := <-ch:
