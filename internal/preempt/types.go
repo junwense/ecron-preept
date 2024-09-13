@@ -6,13 +6,10 @@ import (
 	"github.com/ecodeclub/ecron/internal/task"
 )
 
-var (
-	ErrPreemptHasRelease = errors.New("抢占任务已经被释放，退出自动续约")
-)
-
 //go:generate mockgen -source=./types.go -package=preemptmocks -destination=./mocks/preempt.mock.go
 var (
-	ErrNoTaskToPreempt = errors.New("没有任务可以抢占")
+	ErrNoTaskToPreempt   = errors.New("没有任务可以抢占")
+	ErrPreemptHasRelease = errors.New("抢占任务已经被释放，退出自动续约")
 )
 
 // Preempter 成功会返回TaskLeaser
