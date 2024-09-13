@@ -118,8 +118,8 @@ func (p *PreemptScheduler) doTaskWithAutoRefresh(ctx context.Context, l preempt.
 						return
 					}
 				}
-			case <-cancelCtx.Done():
-				return
+				//case <-cancelCtx.Done():
+				//	return
 			}
 		}
 	}()

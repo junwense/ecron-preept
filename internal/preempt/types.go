@@ -26,10 +26,10 @@ type TaskLeaser interface {
 	// Release 保证幂等，调用后，释放租约，不再能调用 Refresh/AutoRefresh
 	Release(ctx context.Context) error
 
-	// AutoRefresh
+	// AutoRefresh 如果err不为nil，则不会返回ch
 	// 返回一个Status 的ch,有一定缓存，需要自行取走数据
-	// 如果ctx到期，会结束当前AutoRefresh
-	AutoRefresh(ctx context.Context) (s <-chan Status, err error)
+	// 如果ctx到期，会结束当前AutoRefresh并且返回err到ch里
+	AutoRefresh(ctx context.Context) (ch <-chan Status, err error)
 }
 
 type Status interface {
