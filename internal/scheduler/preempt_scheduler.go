@@ -55,7 +55,7 @@ func (p *PreemptScheduler) Schedule(ctx context.Context) error {
 		}
 
 		timeout, cancel := context.WithTimeout(ctx, time.Second*3)
-		t, err := p.pe.Preempt(timeout)
+		leaser, err := p.pe.Preempt(timeout)
 		cancel()
 		if err != nil {
 			p.logger.Error("抢占任务失败,可能没有任务了",
@@ -65,40 +65,52 @@ func (p *PreemptScheduler) Schedule(ctx context.Context) error {
 			continue
 		}
 
+		t := leaser.GetTask()
 		exec, ok := p.executors[t.Executor]
 		if !ok {
 			p.logger.Error("找不到任务的执行器",
 				slog.Int64("TaskID", t.ID),
 				slog.String("Executor", t.Executor))
 			p.limiter.Release(1)
+			err1 := leaser.Release(ctx)
+			if err1 != nil {
+				p.logger.Error("于抢占后释放任务失败",
+					slog.Int64("TaskID", t.ID),
+					slog.Any("err1", err1))
+			}
 			continue
 		}
 
-		go p.doTaskWithAutoRefresh(ctx, t, exec)
+		go p.doTaskWithAutoRefresh(ctx, leaser, exec)
 	}
 }
 
-func (p *PreemptScheduler) doTaskWithAutoRefresh(ctx context.Context, t task.Task, exec executor.Executor) {
+func (p *PreemptScheduler) doTaskWithAutoRefresh(ctx context.Context, l preempt.TaskLeaser, exec executor.Executor) {
 
 	cancelCtx, cancelCause := context.WithCancelCause(ctx)
+	t := l.GetTask()
 	//defer cancelCause(errors.New("正常结束任务"))
 	defer func() {
 		ctx1, cancel := context.WithTimeout(ctx, time.Second*3)
 		defer cancel()
-		err := p.pe.Release(ctx1, t)
+
+		err := l.Release(ctx1)
 		if err != nil {
 			p.logger.Error("停止任务异常", slog.Int64("task_id", t.ID), slog.Any("error", err))
 		}
 	}()
 	go func() {
-		ch := p.pe.AutoRefresh(cancelCtx, t)
+		ch, err := l.AutoRefresh(cancelCtx)
+		if t.NeedInterrupt {
+			cancelCause(err)
+			return
+		}
 		for {
 			select {
 			case s, ok := <-ch:
 				if ok && s.Err() != nil {
 					p.logger.Error(s.Err().Error(), slog.Int64("TaskID", t.ID))
 					if t.NeedInterrupt {
-						// 如果不中断就不管.
 						cancelCause(s.Err())
 						return
 					}

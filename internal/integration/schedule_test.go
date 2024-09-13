@@ -593,6 +593,7 @@ func (s *SchedulerTestSuite) TestScheduleHttpTask() {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
 				s.db.Where(ctx).Delete(mysql.TaskInfo{})
+				s.db.Where(ctx).Delete(mysql.Execution{})
 				err := s.db.WithContext(ctx).Create(mysql.TaskInfo{
 					ID:       5,
 					Name:     "Task5",
@@ -645,6 +646,7 @@ func (s *SchedulerTestSuite) TestScheduleHttpTask() {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
 				s.db.Where(ctx).Delete(mysql.TaskInfo{})
+				s.db.Where(ctx).Delete(mysql.Execution{})
 				err := s.db.WithContext(ctx).Create(mysql.TaskInfo{
 					ID:           6,
 					Name:         "Task6",

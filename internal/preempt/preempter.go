@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,14 +21,11 @@ type DefaultPreempter struct {
 	maxRetryTimes   uint8
 	retrySleepTime  time.Duration
 	randIndex       func(num int) int
-	ones            sync.Once
-	done            chan struct{}
 }
 
 func NewDefaultPreempter(dao storage.TaskRepository) *DefaultPreempter {
 	return &DefaultPreempter{
-		taskRepository: dao,
-
+		taskRepository:  dao,
 		refreshTimeout:  2 * time.Second,
 		refreshInterval: time.Second * 5,
 		buffSize:        10,
@@ -36,30 +34,88 @@ func NewDefaultPreempter(dao storage.TaskRepository) *DefaultPreempter {
 		randIndex: func(num int) int {
 			return rand.Intn(num)
 		},
-		done: make(chan struct{}),
-		ones: sync.Once{},
 	}
 }
 
-func (d *DefaultPreempter) Preempt(ctx context.Context) (task.Task, error) {
-	return d.taskRepository.TryPreempt(ctx, func(ctx context.Context, tasks []task.Task) (task.Task, error) {
+func (p *DefaultPreempter) Preempt(ctx context.Context) (TaskLeaser, error) {
+	t, err := p.taskRepository.TryPreempt(ctx, func(ctx context.Context, tasks []task.Task) (task.Task, error) {
 		size := len(tasks)
-		index := d.randIndex(size)
+		index := p.randIndex(size)
 		var err error
 		for i := index % size; i < size; i++ {
 			t := tasks[i]
 			value := uuid.New().String()
-			err = d.taskRepository.PreemptTask(ctx, t.ID, t.Owner, value)
-			if err == nil {
+			err = p.taskRepository.PreemptTask(ctx, t.ID, t.Owner, value)
+			switch {
+			case err == nil:
 				t.Owner = value
 				return t, nil
+			case errors.Is(err, storage.ErrFailedToPreempt):
+				continue
+			default:
+				return task.Task{}, err
 			}
 		}
-		return task.Task{}, err
+		return task.Task{}, ErrNoTaskToPreempt
 	})
+	if err != nil {
+		return nil, err
+	}
+	var b atomic.Bool
+	b.Store(false)
+	return &DefaultTaskLeaser{
+		t:               t,
+		taskRepository:  p.taskRepository,
+		refreshTimeout:  p.refreshTimeout,
+		refreshInterval: p.refreshInterval,
+		buffSize:        p.buffSize,
+		maxRetryTimes:   p.maxRetryTimes,
+		retrySleepTime:  p.retrySleepTime,
+		done:            make(chan struct{}),
+		ones:            sync.Once{},
+		hasDone:         b,
+	}, err
 }
 
-func (d *DefaultPreempter) AutoRefresh(ctx context.Context, t task.Task) (s <-chan Status) {
+type DefaultTaskLeaser struct {
+	t               task.Task
+	taskRepository  storage.TaskRepository
+	refreshTimeout  time.Duration
+	refreshInterval time.Duration
+	buffSize        uint8
+	maxRetryTimes   uint8
+	retrySleepTime  time.Duration
+	ones            sync.Once
+	done            chan struct{}
+	hasDone         atomic.Bool
+}
+
+func (d *DefaultTaskLeaser) Refresh(ctx context.Context) error {
+	if d.hasDone.Load() {
+		return ErrPreemptHasRelease
+	}
+	return d.taskRepository.RefreshTask(ctx, d.t.ID, d.t.Owner)
+}
+
+func (d *DefaultTaskLeaser) Release(ctx context.Context) error {
+	d.ones.Do(func() {
+		d.hasDone.Store(true)
+		close(d.done)
+	})
+	if d.hasDone.Load() {
+		return ErrPreemptHasRelease
+	}
+	return d.taskRepository.ReleaseTask(ctx, d.t.ID, d.t.Owner)
+}
+
+func (d *DefaultTaskLeaser) GetTask() task.Task {
+	return d.t
+}
+
+func (d *DefaultTaskLeaser) AutoRefresh(ctx context.Context) (s <-chan Status, err error) {
+	if d.hasDone.Load() {
+		return nil, ErrPreemptHasRelease
+	}
 	sch := make(chan Status, d.buffSize)
 	go func() {
 		defer close(sch)
@@ -68,7 +124,7 @@ func (d *DefaultPreempter) AutoRefresh(ctx context.Context, t task.Task) (s <-ch
 		for {
 			select {
 			case <-ticker.C:
-				send2Ch(sch, NewDefaultStatus(d.refreshTask(ctx, t)))
+				send2Ch(sch, NewDefaultStatus(d.refreshTask(ctx)))
 			case <-d.done:
 				send2Ch(sch, NewDefaultStatus(ErrPreemptHasRelease))
 				return
@@ -79,19 +135,11 @@ func (d *DefaultPreempter) AutoRefresh(ctx context.Context, t task.Task) (s <-ch
 		}
 	}()
 
-	return sch
-}
-
-func send2Ch(ch chan<- Status, st Status) {
-	select {
-	case ch <- st:
-	default:
-
-	}
+	return sch, nil
 }
 
 // refreshTask 控制重试和真的执行刷新,续约间隔 > 当次续约（含重试）的所有时间
-func (d *DefaultPreempter) refreshTask(ctx context.Context, t task.Task) error {
+func (d *DefaultTaskLeaser) refreshTask(ctx context.Context) error {
 	var i = 0
 	var err error
 	for {
@@ -104,7 +152,7 @@ func (d *DefaultPreempter) refreshTask(ctx context.Context, t task.Task) error {
 			return err
 		}
 		ctx1, cancel := context.WithTimeout(ctx, d.refreshTimeout)
-		err = d.Refresh(ctx1, t)
+		err = d.Refresh(ctx1)
 		cancel()
 		switch {
 		case err == nil:
@@ -118,13 +166,10 @@ func (d *DefaultPreempter) refreshTask(ctx context.Context, t task.Task) error {
 	}
 }
 
-func (d *DefaultPreempter) Refresh(ctx context.Context, t task.Task) error {
-	return d.taskRepository.RefreshTask(ctx, t.ID, t.Owner)
-}
+func send2Ch(ch chan<- Status, st Status) {
+	select {
+	case ch <- st:
+	default:
 
-func (d *DefaultPreempter) Release(ctx context.Context, t task.Task) error {
-	d.ones.Do(func() {
-		close(d.done)
-	})
-	return d.taskRepository.ReleaseTask(ctx, t.ID, t.Owner)
+	}
 }

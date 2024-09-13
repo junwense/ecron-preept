@@ -11,18 +11,28 @@ var (
 )
 
 //go:generate mockgen -source=./types.go -package=preemptmocks -destination=./mocks/preempt.mock.go
-type Preempter interface {
-	Preempt(ctx context.Context) (task.Task, error)
+var (
+	ErrNoTaskToPreempt = errors.New("没有任务可以抢占")
+)
 
-	// AutoRefresh 调用者调用ctx的cancel之后，才会关闭掉自动续约
-	// 返回一个Status 的ch,有一定缓存，需要自行取走数据
-	// 调用此方法的前提是已经 Preempt 抢占成功任务
-	AutoRefresh(ctx context.Context, t task.Task) (s <-chan Status)
+// Preempter 成功会返回TaskLeaser
+type Preempter interface {
+	Preempt(ctx context.Context) (TaskLeaser, error)
+}
+
+// TaskLeaser 租约
+type TaskLeaser interface {
+	GetTask() task.Task
 
 	// Refresh 保证幂等
-	Refresh(ctx context.Context, t task.Task) error
-	// Release 保证幂等
-	Release(ctx context.Context, t task.Task) error
+	Refresh(ctx context.Context) error
+	// Release 保证幂等，调用后，释放租约，不再能调用 Refresh/AutoRefresh
+	Release(ctx context.Context) error
+
+	// AutoRefresh
+	// 返回一个Status 的ch,有一定缓存，需要自行取走数据
+	// 如果ctx到期，会结束当前AutoRefresh
+	AutoRefresh(ctx context.Context) (s <-chan Status, err error)
 }
 
 type Status interface {

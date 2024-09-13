@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
 	"golang.org/x/net/context"
-	"gorm.io/gorm"
 	"testing"
 	"time"
 )
@@ -19,7 +18,7 @@ func TestPreemptScheduler_Preempt(t *testing.T) {
 		mock     func(ctrl *gomock.Controller) storage.TaskRepository
 		wantErr  error
 		ctxFn    func() context.Context
-		wantTask task.Task
+		wantTask TaskLeaser
 	}{
 		{
 			name: "抢占成功",
@@ -33,9 +32,11 @@ func TestPreemptScheduler_Preempt(t *testing.T) {
 
 				return td
 			},
-			wantTask: task.Task{
-				ID:      1,
-				Version: 1,
+			wantTask: &DefaultTaskLeaser{
+				t: task.Task{
+					ID:      1,
+					Version: 1,
+				},
 			},
 			ctxFn: func() context.Context {
 				return context.Background()
@@ -46,11 +47,11 @@ func TestPreemptScheduler_Preempt(t *testing.T) {
 			mock: func(ctrl *gomock.Controller) storage.TaskRepository {
 				td := daomocks.NewMockTaskRepository(ctrl)
 
-				td.EXPECT().TryPreempt(gomock.Any(), gomock.Any()).Return(task.Task{}, gorm.ErrRecordNotFound)
+				td.EXPECT().TryPreempt(gomock.Any(), gomock.Any()).Return(task.Task{}, storage.ErrFailedToPreempt)
 
 				return td
 			},
-			wantErr: gorm.ErrRecordNotFound,
+			wantErr: storage.ErrFailedToPreempt,
 			ctxFn: func() context.Context {
 				return context.Background()
 			},
@@ -83,12 +84,14 @@ func TestPreemptScheduler_Preempt(t *testing.T) {
 			fn := tc.ctxFn()
 			t1, err := preempter.Preempt(fn)
 			assert.Equal(t, tc.wantErr, err)
-			assert.Equal(t, tc.wantTask, t1)
+			if err == nil {
+				assert.Equal(t, tc.wantTask.GetTask(), t1.GetTask())
+			}
 		})
 	}
 }
 
-func TestPreemptScheduler_RPreempt_AutoRefresh(t *testing.T) {
+func TestPreemptScheduler_TaskLeaser_AutoRefresh(t *testing.T) {
 	testCases := []struct {
 		name    string
 		mock    func(ctrl *gomock.Controller) storage.TaskRepository
@@ -172,18 +175,18 @@ func TestPreemptScheduler_RPreempt_AutoRefresh(t *testing.T) {
 			td := tc.mock(ctrl)
 
 			preempter := NewDefaultPreempter(td)
-			t1, err := preempter.Preempt(context.Background())
+			l, err := preempter.Preempt(context.Background())
 			assert.NoError(t, err)
 
 			ctxFn := tc.ctxFn()
-			sch := preempter.AutoRefresh(ctxFn, t1)
+			sch := l.AutoRefresh(ctxFn)
 			var shouldContinue = true
 			for shouldContinue {
 				select {
 				case s, ok := <-sch:
 					if ok && s.Err() != nil {
 						assert.Equal(t, tc.wantErr, s.Err())
-						err1 := preempter.Release(ctxFn, t1)
+						err1 := l.Release(ctxFn)
 						assert.NoError(t, err1)
 						shouldContinue = false
 					}
@@ -193,7 +196,7 @@ func TestPreemptScheduler_RPreempt_AutoRefresh(t *testing.T) {
 	}
 }
 
-func TestPreemptScheduler_RPreempt_Release(t *testing.T) {
+func TestPreemptScheduler_TaskLeaser_Release(t *testing.T) {
 	testCases := []struct {
 		name    string
 		mock    func(ctrl *gomock.Controller) storage.TaskRepository
@@ -235,11 +238,11 @@ func TestPreemptScheduler_RPreempt_Release(t *testing.T) {
 			td := tc.mock(ctrl)
 
 			preempter := NewDefaultPreempter(td)
-			t1, err := preempter.Preempt(context.Background())
+			l, err := preempter.Preempt(context.Background())
 			assert.NoError(t, err)
 
 			ctxFn := tc.ctxFn()
-			sch := preempter.AutoRefresh(ctxFn, t1)
+			sch := l.AutoRefresh(ctxFn)
 			go func() {
 				var shouldContinue = true
 				for shouldContinue {
@@ -247,7 +250,7 @@ func TestPreemptScheduler_RPreempt_Release(t *testing.T) {
 					case s, ok := <-sch:
 						if ok && s.Err() != nil {
 							assert.Equal(t, tc.wantErr, s.Err())
-							err1 := preempter.Release(ctxFn, t1)
+							err1 := l.Release(ctxFn)
 							assert.NoError(t, err1)
 							shouldContinue = false
 						}
@@ -255,7 +258,7 @@ func TestPreemptScheduler_RPreempt_Release(t *testing.T) {
 				}
 			}()
 			time.Sleep(time.Second * 6)
-			err1 := preempter.Release(ctxFn, t1)
+			err1 := l.Release(ctxFn)
 			assert.NoError(t, err1)
 
 			time.Sleep(time.Second * 12)
