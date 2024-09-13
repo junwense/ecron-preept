@@ -63,7 +63,7 @@ func (p *DefaultPreempter) Preempt(ctx context.Context) (TaskLeaser, error) {
 	}
 	var b atomic.Bool
 	b.Store(false)
-	return &DefaultTaskLeaser{
+	return &defaultTaskLeaser{
 		t:               t,
 		taskRepository:  p.taskRepository,
 		refreshTimeout:  p.refreshTimeout,
@@ -77,7 +77,7 @@ func (p *DefaultPreempter) Preempt(ctx context.Context) (TaskLeaser, error) {
 	}, err
 }
 
-type DefaultTaskLeaser struct {
+type defaultTaskLeaser struct {
 	t               task.Task
 	taskRepository  storage.TaskRepository
 	refreshTimeout  time.Duration
@@ -90,29 +90,30 @@ type DefaultTaskLeaser struct {
 	hasDone         atomic.Bool
 }
 
-func (d *DefaultTaskLeaser) Refresh(ctx context.Context) error {
+func (d *defaultTaskLeaser) Refresh(ctx context.Context) error {
 	if d.hasDone.Load() {
 		return ErrLeaserHasRelease
 	}
 	return d.taskRepository.RefreshTask(ctx, d.t.ID, d.t.Owner)
 }
 
-func (d *DefaultTaskLeaser) Release(ctx context.Context) error {
+func (d *defaultTaskLeaser) Release(ctx context.Context) error {
+
+	if d.hasDone.Load() {
+		return ErrLeaserHasRelease
+	}
 	d.ones.Do(func() {
 		d.hasDone.Store(true)
 		close(d.done)
 	})
-	if d.hasDone.Load() {
-		return ErrLeaserHasRelease
-	}
 	return d.taskRepository.ReleaseTask(ctx, d.t.ID, d.t.Owner)
 }
 
-func (d *DefaultTaskLeaser) GetTask() task.Task {
+func (d *defaultTaskLeaser) GetTask() task.Task {
 	return d.t
 }
 
-func (d *DefaultTaskLeaser) AutoRefresh(ctx context.Context) (s <-chan Status, err error) {
+func (d *defaultTaskLeaser) AutoRefresh(ctx context.Context) (s <-chan Status, err error) {
 	if d.hasDone.Load() {
 		return nil, ErrLeaserHasRelease
 	}
@@ -139,7 +140,7 @@ func (d *DefaultTaskLeaser) AutoRefresh(ctx context.Context) (s <-chan Status, e
 }
 
 // refreshTask 控制重试和真的执行刷新,续约间隔 > 当次续约（含重试）的所有时间
-func (d *DefaultTaskLeaser) refreshTask(ctx context.Context) error {
+func (d *defaultTaskLeaser) refreshTask(ctx context.Context) error {
 	var i = 0
 	var err error
 	for {

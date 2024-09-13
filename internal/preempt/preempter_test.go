@@ -32,7 +32,7 @@ func TestPreemptScheduler_Preempt(t *testing.T) {
 
 				return td
 			},
-			wantTask: &DefaultTaskLeaser{
+			wantTask: &defaultTaskLeaser{
 				t: task.Task{
 					ID:      1,
 					Version: 1,
@@ -179,7 +179,8 @@ func TestPreemptScheduler_TaskLeaser_AutoRefresh(t *testing.T) {
 			assert.NoError(t, err)
 
 			ctxFn := tc.ctxFn()
-			sch := l.AutoRefresh(ctxFn)
+			sch, err1 := l.AutoRefresh(ctxFn)
+			assert.NoError(t, err1)
 			var shouldContinue = true
 			for shouldContinue {
 				select {
@@ -242,7 +243,8 @@ func TestPreemptScheduler_TaskLeaser_Release(t *testing.T) {
 			assert.NoError(t, err)
 
 			ctxFn := tc.ctxFn()
-			sch := l.AutoRefresh(ctxFn)
+			sch, err2 := l.AutoRefresh(ctxFn)
+			assert.NoError(t, err2)
 			go func() {
 				var shouldContinue = true
 				for shouldContinue {
