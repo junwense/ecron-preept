@@ -89,7 +89,6 @@ func (p *PreemptScheduler) doTaskWithAutoRefresh(ctx context.Context, l preempt.
 
 	cancelCtx, cancelCause := context.WithCancelCause(ctx)
 	t := l.GetTask()
-	//defer cancelCause(errors.New("正常结束任务"))
 	defer func() {
 		ctx1, cancel := context.WithTimeout(ctx, time.Second*3)
 		defer cancel()
@@ -99,27 +98,20 @@ func (p *PreemptScheduler) doTaskWithAutoRefresh(ctx context.Context, l preempt.
 			p.logger.Error("停止任务异常", slog.Int64("task_id", t.ID), slog.Any("error", err))
 		}
 	}()
+
 	go func() {
 		ch, err := l.AutoRefresh(cancelCtx)
 		if err != nil {
-			if t.NeedInterrupt {
-				cancelCause(err)
-			}
+			cancelCause(err)
 			return
 		}
 
 		for {
-			select {
-			case s, ok := <-ch:
-				if ok && s.Err() != nil {
-					p.logger.Error(s.Err().Error(), slog.Int64("TaskID", t.ID))
-					if t.NeedInterrupt {
-						cancelCause(s.Err())
-						return
-					}
-				}
-				//case <-cancelCtx.Done():
-				//	return
+			s, ok := <-ch
+			if ok && s.Err() != nil {
+				p.logger.Error(s.Err().Error(), slog.Int64("TaskID", t.ID))
+				cancelCause(s.Err())
+				return
 			}
 		}
 	}()

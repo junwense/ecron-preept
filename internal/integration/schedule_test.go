@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"github.com/ecodeclub/ecron/internal/executor"
 	"github.com/ecodeclub/ecron/internal/integration/startup"
-	"github.com/ecodeclub/ecron/internal/preempt"
 	"github.com/ecodeclub/ecron/internal/scheduler"
 	"github.com/ecodeclub/ecron/internal/storage/mysql"
 	"github.com/ecodeclub/ecron/internal/task"
@@ -38,12 +37,11 @@ func (s *SchedulerTestSuite) SetupSuite() {
 	s.db = startup.InitDB()
 	s.db.Logger = s.db.Logger.LogMode(logger.Info)
 	//taskDAO := mysql.NewGormTaskDAO(s.db, 10, time.Second*5)
-	taskRepository := mysql.NewGormTaskRepository(s.db, 10, time.Second*5)
 	executionDAO := mysql.NewGormExecutionDAO(s.db)
 	gormTaskCfgDAO := mysql.NewGormTaskCfgRepository(s.db)
 	limiter := semaphore.NewWeighted(1)
 	s.logger = startup.InitLogger()
-	p := preempt.NewDefaultPreempter(taskRepository)
+	p := mysql.NewPreempter(s.db, 10, time.Second*5)
 
 	s.s = scheduler.NewPreemptScheduler(executionDAO, time.Second*5, limiter, s.logger, p, gormTaskCfgDAO)
 

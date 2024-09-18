@@ -35,3 +35,17 @@ type TaskLeaser interface {
 type Status interface {
 	Err() error
 }
+
+type DefaultStatus struct {
+	err error
+}
+
+func (d DefaultStatus) Err() error {
+	return d.err
+}
+
+func NewDefaultStatus(err error) DefaultStatus {
+	return DefaultStatus{
+		err: err,
+	}
+}

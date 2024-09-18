@@ -12,12 +12,9 @@ type Task struct {
 	Executor string
 	Cfg      string
 	CronExp  string
-	Version  int
 	Owner    string
 	Ctime    time.Time
 	Utime    time.Time
-
-	NeedInterrupt bool
 }
 
 type Type string

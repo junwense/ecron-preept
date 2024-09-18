@@ -9,10 +9,9 @@ type TaskInfo struct {
 	ID   int64 `gorm:"primary_key;auto_increment"`
 	Name string
 	// 任务类型
-	Type     string
-	Cron     string
-	Executor string
-	//Version      int
+	Type         string
+	Cron         string
+	Executor     string
 	Owner        string
 	Status       int8
 	Cfg          string
